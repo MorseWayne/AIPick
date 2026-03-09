@@ -16,7 +16,7 @@ class AgentCallback(Protocol):
     def on_status_update(self, stage: str, message: str) -> None: ...
     def on_info(self, message: str) -> None: ...
     def on_warning(self, message: str) -> None: ...
-    def on_question_asked(self, question: str, reason: str) -> None: ...
+    def on_question_asked(self, question: str, reason: str, options: Optional[List[Dict[str, str]]] = None) -> None: ...
     def on_intent_confirmed(self, intent: 'SearchIntent') -> None: ...
     def on_recommendation_completed(self, intent: 'SearchIntent', web_report: 'WebSearchReport', final_report: 'RecommendationReport') -> None: ...
     async def request_user_input(self, prompt: str) -> str: ...
@@ -32,10 +32,12 @@ class DefaultCliCallback:
     def on_warning(self, message: str) -> None:
         print(f"⚠️ {message}")
         
-    def on_question_asked(self, question: str, reason: str) -> None:
+    def on_question_asked(self, question: str, reason: str, options: Optional[List[Dict[str, str]]] = None) -> None:
         reason_str = f"（{reason}）" if reason else ""
         print(f"\n🙋 顾问追问 {reason_str}：")
         print(f"   {question}")
+        if options:
+            print(f"   选项: {' / '.join([opt.get('label', '') for opt in options if isinstance(opt, dict) and opt.get('label')])}")
 
     def on_intent_confirmed(self, intent: SearchIntent) -> None:
         """展示收集到的完整需求档案"""
@@ -797,7 +799,8 @@ class RecommendationAgent:
                     break
                 
                 reason = analysis.follow_up_reason or ""
-                callback.on_question_asked(question, reason)
+                options = [{"label": item, "value": item} for item in analysis.follow_up_options if item]
+                callback.on_question_asked(question, reason, options if options else None)
                 history.append({"role": "assistant", "content": question})
                 
                 user_reply = await callback.request_user_input("\n> 回答 (输入 'q' 取消, 's' 跳过此问题): ")

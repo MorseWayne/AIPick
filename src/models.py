@@ -31,6 +31,10 @@ class NeedsAnalysis(BaseModel):
         description="简短的追问理由（展示给用户，让用户理解为什么需要这个信息），"
                     "例如：'了解您的肤质可以帮我排除可能引起过敏的产品'"
     )
+    follow_up_options: List[str] = Field(
+        default_factory=list,
+        description="可选回答项列表，用于快速选择，建议 2~5 个简短选项"
+    )
 
     # ----- 以下是从对话中逐步提取的结构化意图 -----
     category: Optional[str] = Field(None, description="商品类目")

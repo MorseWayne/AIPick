@@ -4,8 +4,8 @@ import logging
 import json
 import time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import uvicorn
 from pydantic import BaseModel
 from typing import List, Optional
@@ -21,12 +21,24 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Make sure static and output directories exist
-os.makedirs("static", exist_ok=True)
+# Make sure output directory exists
 os.makedirs("output", exist_ok=True)
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/output", StaticFiles(directory="output"), name="output")
+
+allowed_origins = os.getenv(
+    "FRONTEND_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173",
+).split(",")
+allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 HISTORY_FILE = "history.json"
 
@@ -57,8 +69,8 @@ def save_history(history: List[SessionEntry]):
         logger.error(f"Error saving history: {e}")
 
 @app.get("/")
-async def get_index():
-    return FileResponse("static/index.html")
+async def health():
+    return {"service": "aipick-backend", "status": "ok"}
 
 @app.get("/api/history")
 async def get_history():
@@ -85,6 +97,18 @@ async def get_session(session_id: str):
         "content": content
     }
 
+@app.delete("/api/session/{session_id}")
+async def delete_session(session_id: str):
+    history = load_history()
+    target = next((s for s in history if s.id == session_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    remaining = [s for s in history if s.id != session_id]
+    save_history(remaining)
+
+    return {"ok": True, "deleted": session_id}
+
 class WebSocketCallback:
     def __init__(self, websocket: WebSocket, initial_query: str):
         self.ws = websocket
@@ -108,8 +132,8 @@ class WebSocketCallback:
     def on_warning(self, message: str) -> None:
         self._send({"type": "warning", "message": message})
 
-    def on_question_asked(self, question: str, reason: str) -> None:
-        self._send({"type": "question", "question": question, "reason": reason})
+    def on_question_asked(self, question: str, reason: str, options: Optional[List[dict]] = None) -> None:
+        self._send({"type": "question", "question": question, "reason": reason, "options": options})
 
     def on_intent_confirmed(self, intent: SearchIntent) -> None:
         self._send({"type": "intent", "data": intent.model_dump()})
