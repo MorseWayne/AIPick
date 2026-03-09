@@ -1,5 +1,10 @@
 import os
 import asyncio
+try:
+    import readline # 用于在Unix系终端修复回车/退格键的输入问题
+except ImportError:
+    pass
+
 from dotenv import load_dotenv
 
 from src.agent import RecommendationAgent
@@ -19,25 +24,33 @@ async def main():
 
     agent = RecommendationAgent(mcp_url="http://10.10.131.118:18060/mcp")
     
-    print("\n欢迎使用【小红书MCP商品意向分析助手】")
+    print("\n欢迎使用【AIPick】")
     print("您可以输入您的自然语言需求，例如：我想买一台5000左右的轻薄本写代码")
     
     while True:
         try:
             query = input("\n> 请出题 (输入 'q' 退出): ")
-            if query.strip().lower() in ['q', 'quit', 'exit']:
-                break
-            if not query.strip():
-                continue
-                
-            await agent.run_pipeline(query)
-            
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
+            print("\n\n再见！")
+            break
+
+        if query.strip().lower() in ['q', 'quit', 'exit']:
             print("\n再见！")
             break
+        if not query.strip():
+            continue
+            
+        try:
+            await agent.run_pipeline(query)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            print("\n\n[当前任务已被手动中止，已返回主菜单]")
+            continue
         except Exception as e:
             print(f"\n[错误中断] 运行时报错: {e}")
             print("如果报错与反序列化相关，说明 MCP 服务的返回结构与默认的解析方式不符，请查看 src/agent.py 进行修整。")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError, EOFError):
+        pass
