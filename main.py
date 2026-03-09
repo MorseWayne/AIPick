@@ -60,7 +60,7 @@ async def main():
     agent = RecommendationAgent(mcp_url=mcp_url)
     
     print("\n欢迎使用【AIPick】")
-    print("您可以输入您的自然语言需求，例如：我想买一台5000左右的轻薄本写代码")
+    print("您可以输入您的自然语言需求，例如：我想买适用用中年女性的护肤品，目的是抗衰老，祛斑，体质是油性皮肤，容易长痘，看看买什么合适")
     
     while True:
         try:
