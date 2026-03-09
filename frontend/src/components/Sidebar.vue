@@ -1,6 +1,6 @@
 <script setup>
 import { defineProps, defineEmits, ref, onMounted, nextTick } from 'vue';
-import { Send, Bot, Clock, PlusCircle, Search, FileText, Brain, ClipboardList } from 'lucide-vue-next';
+import { Send, Bot, Clock, PlusCircle, Search, FileText, Brain, ClipboardList, CheckCircle2, Loader2 } from 'lucide-vue-next';
 
 const props = defineProps({
   activeSession: Object,
@@ -41,18 +41,72 @@ const scrollToBottom = () => {
 
 const extractOptionsFromText = (text) => {
   const raw = String(text || '');
-  const cueMatch = raw.match(/(?:比如|例如|如)\s*[:：]?\s*([^\n]+)/);
-  const segment = cueMatch ? cueMatch[1] : '';
-  const splitTarget = segment || raw;
-  const parts = splitTarget
-    .replace(/还是/g, '、')
-    .replace(/或者/g, '、')
-    .replace(/或/g, '、')
-    .split(/[、，,\/]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const unique = Array.from(new Set(parts));
-  return unique.length >= 2 ? unique : [];
+
+  // 括号感知分割：只在括号深度为 0 的位置按 delimiter 切割
+  const splitOutsideParens = (str, delimiter) => {
+    const parts = [];
+    let depth = 0;
+    let current = '';
+    let i = 0;
+    while (i < str.length) {
+      const ch = str[i];
+      if (ch === '（' || ch === '(') {
+        depth++;
+        current += ch;
+        i++;
+      } else if (ch === '）' || ch === ')') {
+        depth--;
+        current += ch;
+        i++;
+      } else if (depth === 0 && str.startsWith(delimiter, i)) {
+        parts.push(current.trim());
+        current = '';
+        i += delimiter.length;
+      } else {
+        current += ch;
+        i++;
+      }
+    }
+    const last = current.trim();
+    if (last) parts.push(last);
+    return parts;
+  };
+
+  // 清洗选项：去掉前置疑问词和尾部语气词
+  const cleanOption = (s) =>
+    s
+      .replace(/^(您|你|自己)?(更|最)?(倾向|喜欢|偏好|觉得|认为|希望|想要|需要|是|选择|偏向|想)\s*/, '')
+      .replace(/\s*(呢|吗|哦|啊|呀|啦|嗯|么|了|的|吧|对吗)\s*$/, '')
+      .trim();
+
+  // 只对问句部分（？之前）进行解析
+  const questionPart = raw.split(/[？?]/)[0];
+
+  // 策略 1：在括号外按"还是"或"或者"分割（最常见的选择型提问）
+  for (const delimiter of ['还是', '或者']) {
+    const splitResult = splitOutsideParens(questionPart, delimiter);
+    if (splitResult.length >= 2) {
+      const lastOpt = cleanOption(splitResult[splitResult.length - 1]);
+      const firstOpts = splitResult.slice(0, -1).flatMap((p) => {
+        const subParts = splitOutsideParens(p, '、');
+        return subParts.length > 1 ? subParts.map(cleanOption) : [cleanOption(p)];
+      });
+      const options = [...firstOpts, lastOpt].filter((s) => s.length > 0);
+      if (options.length >= 2) return options;
+    }
+  }
+
+  // 策略 2：查找"比如""例如"后跟枚举列表（括号感知）
+  const cueMatch = questionPart.match(/(?:比如|例如)\s*[:：]?\s*(.+)/);
+  if (cueMatch) {
+    const segment = cueMatch[1];
+    let parts = splitOutsideParens(segment, '、');
+    if (parts.length < 2) parts = splitOutsideParens(segment, '，');
+    const cleaned = parts.map(cleanOption).filter((s) => s.length > 0);
+    if (cleaned.length >= 2) return cleaned;
+  }
+
+  return [];
 };
 
 const normalizeOptions = (options, text) => {
@@ -150,6 +204,47 @@ const addMessage = (msg) => {
   scrollToBottom();
 };
 
+const ANALYZING_MSG_ID = 'msg-analyzing';
+const analyzingProgress = ref(0);
+const analyzingSteps = ref([]);
+
+const stageProgressMap = {
+  'Phase 0': 15,
+  'Phase 1': 40,
+  'Phase 2': 65,
+  'Phase 3': 85,
+};
+
+const updateAnalyzing = (text, stage) => {
+  if (stage && stageProgressMap[stage] !== undefined) {
+    analyzingProgress.value = stageProgressMap[stage];
+  } else {
+    analyzingProgress.value = Math.min(analyzingProgress.value + 8, 90);
+  }
+  const cleaned = String(text || '').replace(/\[Deep Research\]/gi, '').replace(/Deep Research/gi, '').replace(/^[\s·]+/, '').trim();
+  if (cleaned) {
+    analyzingSteps.value.push(cleaned);
+  }
+  const existing = messages.value.find(m => m.id === ANALYZING_MSG_ID);
+  if (!existing) {
+    messages.value.push({
+      id: ANALYZING_MSG_ID,
+      role: 'bot',
+      isAnalyzing: true,
+    });
+  }
+  scrollToBottom();
+};
+
+const clearAnalyzing = () => {
+  const idx = messages.value.findIndex(m => m.id === ANALYZING_MSG_ID);
+  if (idx !== -1) {
+    messages.value.splice(idx, 1);
+  }
+  analyzingProgress.value = 0;
+  analyzingSteps.value = [];
+};
+
 const setStepIndex = (index) => {
   const next = Math.max(0, Math.min(steps.length - 1, index));
   currentStepIndex.value = next;
@@ -207,6 +302,13 @@ const isSelected = (msg, option) => {
   return Array.isArray(msg.selectedOptions) && msg.selectedOptions.includes(option.value);
 };
 
+const selectSingleOption = (msg, option) => {
+  if (msg.confirmed) return;
+  msg.confirmed = true;
+  msg.selectedOptions = [option.value];
+  sendOption(option.value);
+};
+
 const toggleOption = (msg, option) => {
   if (msg.confirmed) return;
   const value = option.value;
@@ -246,12 +348,26 @@ const confirmOptions = (msg) => {
 
 const handleSend = () => {
   if (!input.value.trim()) return;
-  
+
   const text = input.value.trim();
   input.value = '';
-  
-  
-  emit('sendMessage', text);
+
+  const pendingMsg = [...messages.value].reverse().find(
+    m => m.role === 'bot' && Array.isArray(m.options) && m.options.length > 0 && !m.confirmed
+  );
+
+  if (pendingMsg) {
+    const selected = Array.isArray(pendingMsg.selectedOptions)
+      ? pendingMsg.selectedOptions.filter(Boolean)
+      : [];
+    const merged = [...selected, text].join('、');
+    pendingMsg.confirmed = true;
+    addMessage({ id: Date.now(), role: 'user', text: merged });
+    emit('sendMessage', merged);
+  } else {
+    addMessage({ id: Date.now(), role: 'user', text });
+    emit('sendMessage', text);
+  }
 };
 
 defineExpose({
@@ -260,7 +376,10 @@ defineExpose({
   clearMessages: () => {
     messages.value = [WELCOME_MESSAGE];
     setStepIndex(0);
+    analyzingProgress.value = 0;
   },
+  updateAnalyzing,
+  clearAnalyzing,
   syncStepByStatus,
   syncStepByQuestion,
   syncStepByIntent,
@@ -334,8 +453,54 @@ onMounted(() => {
     <div class="flex-1 overflow-y-auto p-4 space-y-6 bg-[#F8FAFC]">
       <div v-for="msg in messages" :key="msg.id" class="flex flex-col space-y-2" :class="msg.role === 'user' ? 'items-end' : 'items-start'">
         
-        <!-- Bot Message -->
-        <div v-if="msg.role === 'bot'" class="flex items-start max-w-[90%] group">
+        <!-- Bot Message: Analyzing Progress Card -->
+        <div v-if="msg.role === 'bot' && msg.isAnalyzing" class="flex items-start max-w-[90%] group">
+          <div class="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 mr-3 shadow-sm mt-1 text-indigo-600">
+             <Bot class="w-4 h-4" />
+          </div>
+          <div class="p-4 rounded-2xl rounded-tl-none shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-indigo-100 bg-white text-slate-700 w-full">
+            <div class="flex items-center mb-3">
+              <Loader2 class="w-4 h-4 mr-2 text-indigo-600 animate-spin" />
+              <span class="text-xs font-semibold text-indigo-600 uppercase tracking-wider">正在处理中...</span>
+            </div>
+            <div class="space-y-2">
+              <div
+                v-for="(step, idx) in analyzingSteps"
+                :key="idx"
+                class="flex items-start gap-2 text-[13px] leading-relaxed"
+                :class="idx === analyzingSteps.length - 1 ? 'text-indigo-600 font-medium' : 'text-slate-400'"
+              >
+                <span class="mt-0.5 flex-shrink-0">{{ idx === analyzingSteps.length - 1 ? '▶' : '✓' }}</span>
+                <span>{{ step }}</span>
+              </div>
+            </div>
+            <div class="mt-3">
+              <div class="h-1.5 bg-indigo-100 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out"
+                  :style="{ width: `${analyzingProgress}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bot Message: Intent Summary Card -->
+        <div v-else-if="msg.role === 'bot' && msg.type === 'intent-summary'" class="flex items-start max-w-[90%] group">
+          <div class="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 mr-3 shadow-sm mt-1 text-indigo-600">
+             <Bot class="w-4 h-4" />
+          </div>
+          <div class="p-4 rounded-2xl rounded-tl-none shadow-[0_2px_8px_rgba(0,0,0,0.04)] bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 text-slate-800">
+            <div class="whitespace-pre-line text-[13px] leading-[1.8] font-medium">{{ msg.text }}</div>
+            <div class="mt-3 pt-2 border-t border-emerald-200/50 flex items-center text-[11px] text-emerald-600 font-medium">
+              <CheckCircle2 class="w-3.5 h-3.5 mr-1.5" />
+              需求已确认，即将开始全网分析
+            </div>
+          </div>
+        </div>
+
+        <!-- Bot Message: Normal -->
+        <div v-else-if="msg.role === 'bot'" class="flex items-start max-w-[90%] group">
           <div class="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 mr-3 shadow-sm mt-1 text-indigo-600">
              <Bot class="w-4 h-4" />
           </div>
@@ -343,47 +508,57 @@ onMounted(() => {
             {{ msg.text }}
             
             <div v-if="msg.options?.length" class="mt-3">
-              <div class="text-[11px] text-slate-400 font-medium mb-2">点击选择您在意的偏好（可多选）：</div>
+              <div class="text-[11px] text-slate-400 font-medium mb-2">
+                {{ msg.allowMultiple ? '点击选择（可多选）：' : '点击选择：' }}
+              </div>
               <ul class="space-y-2">
                 <li v-for="opt in msg.options" :key="opt.value">
                   <button
                     :disabled="msg.confirmed"
-                    @click="toggleOption(msg, opt)"
+                    @click="msg.allowMultiple ? toggleOption(msg, opt) : selectSingleOption(msg, opt)"
                     class="w-full px-3 py-2.5 rounded-xl border text-xs font-medium transition-colors flex items-center gap-3 text-left"
                     :class="isSelected(msg, opt) ? 'bg-indigo-50 border-indigo-300 text-indigo-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200'"
                   >
-                    <span class="w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0" :class="isSelected(msg, opt) ? 'border-indigo-400' : 'border-slate-300'">
-                      <span class="w-2 h-2 rounded-full bg-indigo-500" :class="isSelected(msg, opt) ? 'opacity-100' : 'opacity-0'"></span>
+                    <span class="w-4 h-4 border flex items-center justify-center flex-shrink-0" :class="[
+                      msg.allowMultiple ? 'rounded' : 'rounded-full',
+                      isSelected(msg, opt) ? 'border-indigo-400' : 'border-slate-300'
+                    ]">
+                      <span class="w-2 h-2 bg-indigo-500" :class="[
+                        msg.allowMultiple ? 'rounded-sm' : 'rounded-full',
+                        isSelected(msg, opt) ? 'opacity-100' : 'opacity-0'
+                      ]"></span>
                     </span>
                     <span class="flex-1 text-left">{{ opt.label }}</span>
                   </button>
                 </li>
               </ul>
-              <div class="mt-3 flex items-center gap-2">
-                <input
-                  :value="msg.customInput"
-                  @input="updateCustomInput(msg, $event.target.value)"
-                  :disabled="msg.confirmed"
-                  type="text"
-                  placeholder="输入自定义偏好..."
-                  class="flex-1 bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-full px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
-                />
+              <template v-if="msg.allowMultiple">
+                <div class="mt-3 flex items-center gap-2">
+                  <input
+                    :value="msg.customInput"
+                    @input="updateCustomInput(msg, $event.target.value)"
+                    :disabled="msg.confirmed"
+                    type="text"
+                    placeholder="输入自定义偏好..."
+                    class="flex-1 bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-full px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500"
+                  />
+                  <button
+                    @click="addCustomOption(msg)"
+                    :disabled="msg.confirmed || !String(msg.customInput || '').trim()"
+                    class="w-10 h-10 rounded-full border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 transition-colors flex items-center justify-center"
+                  >
+                    +
+                  </button>
+                </div>
                 <button
-                  @click="addCustomOption(msg)"
-                  :disabled="msg.confirmed || !String(msg.customInput || '').trim()"
-                  class="w-10 h-10 rounded-full border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 transition-colors flex items-center justify-center"
+                  @click="confirmOptions(msg)"
+                  :disabled="msg.confirmed || !msg.selectedOptions?.length"
+                  class="mt-3 w-full py-2.5 rounded-xl text-xs font-semibold transition-colors"
+                  :class="msg.confirmed || !msg.selectedOptions?.length ? 'bg-slate-100 text-slate-400 border border-slate-200' : 'bg-indigo-600 text-white hover:bg-indigo-500'"
                 >
-                  +
+                  {{ msg.selectedOptions?.length ? '确认选择' : '请至少选择一项' }}
                 </button>
-              </div>
-              <button
-                @click="confirmOptions(msg)"
-                :disabled="msg.confirmed || !msg.selectedOptions?.length"
-                class="mt-3 w-full py-2.5 rounded-xl text-xs font-semibold transition-colors"
-                :class="msg.confirmed || !msg.selectedOptions?.length ? 'bg-slate-100 text-slate-400 border border-slate-200' : 'bg-indigo-600 text-white hover:bg-indigo-500'"
-              >
-                {{ msg.selectedOptions?.length ? '确认选择' : '请至少选择一项偏好' }}
-              </button>
+              </template>
             </div>
           </div>
         </div>

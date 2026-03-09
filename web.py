@@ -132,8 +132,8 @@ class WebSocketCallback:
     def on_warning(self, message: str) -> None:
         self._send({"type": "warning", "message": message})
 
-    def on_question_asked(self, question: str, reason: str, options: Optional[List[dict]] = None) -> None:
-        self._send({"type": "question", "question": question, "reason": reason, "options": options})
+    def on_question_asked(self, question: str, reason: str, options: Optional[List[dict]] = None, allow_multiple: bool = False) -> None:
+        self._send({"type": "question", "question": question, "reason": reason, "options": options, "allow_multiple": allow_multiple})
 
     def on_intent_confirmed(self, intent: SearchIntent) -> None:
         self._send({"type": "intent", "data": intent.model_dump()})

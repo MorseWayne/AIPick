@@ -14,48 +14,36 @@ class SearchIntent(BaseModel):
     search_queries: List[str] = Field(default_factory=list, description="LLM 从多个角度生成的 2~3 个补充搜索查询（用于 Phase 1 扩大候选覆盖面）")
 
 class NeedsAnalysis(BaseModel):
-    """LLM 对用户需求的深度分析，用于驱动多轮对话式追问"""
-    is_sufficient: bool = Field(
-        description="当前收集到的信息是否已足够进行精准的商品搜索推荐。"
-                    "判断标准：至少需明确【商品类目】+【大致预算】+【2个以上具体核心需求】。"
-                    "如果用户首次输入就非常详细，可以直接标为 true。"
-    )
-    follow_up_question: Optional[str] = Field(
-        None,
-        description="如果信息不足，生成的下一个追问问题。"
-                    "问题应该自然亲切、有针对性，帮助深度挖掘用户真实需求。"
-                    "每次只问一个问题，不要同时问多个。"
-    )
-    follow_up_reason: Optional[str] = Field(
-        None,
-        description="简短的追问理由（展示给用户，让用户理解为什么需要这个信息），"
-                    "例如：'了解您的肤质可以帮我排除可能引起过敏的产品'"
-    )
-    follow_up_options: List[str] = Field(
-        default_factory=list,
-        description="可选回答项列表，用于快速选择，建议 2~5 个简短选项"
+    """LLM 对用户需求的深度分析结果"""
+    is_sufficient: bool = Field(description="信息是否足够进行搜索推荐")
+    follow_up_question: Optional[str] = Field(None, description="追问问题")
+    follow_up_reason: Optional[str] = Field(None, description="追问理由")
+    follow_up_options: List[str] = Field(default_factory=list, description="与 follow_up_question 直接对应的快捷回答选项，必须是该问题的合理答案")
+    category: Optional[str] = Field(None, description="商品类目")
+    budget: Optional[str] = Field(None, description="预算范围")
+    core_needs: List[str] = Field(default_factory=list, description="核心需求列表")
+    user_profile: Optional[str] = Field(None, description="用户画像")
+    usage_scenario: Optional[str] = Field(None, description="使用场景")
+    brand_preference: Optional[str] = Field(None, description="品牌偏好")
+    pain_points: List[str] = Field(default_factory=list, description="过往痛点")
+    keywords: str = Field(default="", description="搜索关键词")
+    search_queries: List[str] = Field(default_factory=list, description="多角度补充搜索查询")
+
+class QuestionItem(BaseModel):
+    """批量追问中的单个问题"""
+    question: str = Field(description="要向用户提出的追问问题")
+    reason: str = Field(description="为什么需要问这个问题（一句话解释）")
+    options: List[str] = Field(default_factory=list, description="2~5个简短选项（每个≤10汉字），必须是该问题的直接回答")
+    allow_multiple: bool = Field(
+        default=False,
+        description="是否允许多选。互斥性维度（预算、年龄段、性别）为false；可叠加维度（功能需求、品牌偏好、痛点）为true"
     )
 
-    # ----- 以下是从对话中逐步提取的结构化意图 -----
-    category: Optional[str] = Field(None, description="商品类目")
-    budget: Optional[str] = Field(None, description="用户预算范围")
-    core_needs: List[str] = Field(default_factory=list, description="核心需求列表")
-    user_profile: Optional[str] = Field(
-        None, description="用户画像描述（年龄段、性别、个人特征如肤质/体型等）"
-    )
-    usage_scenario: Optional[str] = Field(
-        None, description="使用场景（日常/送礼/特定活动等）"
-    )
-    brand_preference: Optional[str] = Field(
-        None, description="品牌偏好或排斥信息"
-    )
-    pain_points: List[str] = Field(
-        default_factory=list, description="用户过往使用同类产品的痛点/踩坑经历"
-    )
-    keywords: str = Field(
-        default="",
-        description="综合所有已收集到的信息合成的搜索关键词（即使信息还不完整也尝试生成）"
-    )
+class BatchQuestions(BaseModel):
+    """LLM 根据用户初始输入一次性生成的追问问题列表"""
+    questions: List[QuestionItem] = Field(description="需要向用户追问的问题列表，按重要性排序")
+    category: Optional[str] = Field(None, description="从输入中初步提取的商品类目")
+    initial_keywords: str = Field(default="", description="初步搜索关键词")
 
 class CandidateProduct(BaseModel):
     """LLM联网搜索阶段筛选出的候选商品"""

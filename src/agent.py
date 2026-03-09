@@ -4,9 +4,9 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Protocol
 from openai import AsyncOpenAI
-from src.models import SearchIntent, NeedsAnalysis, RecommendationReport, ProductEvaluation, WebSearchReport, CandidateProduct
+from src.models import SearchIntent, NeedsAnalysis, RecommendationReport, ProductEvaluation, WebSearchReport, CandidateProduct, BatchQuestions, QuestionItem
 from src.xhs_mcp_client import XhsMcpClient
-from src.prompts import NEEDS_ANALYSIS_PROMPT, build_web_search_prompt, build_comprehensive_analysis_prompt
+from src.prompts import build_needs_analysis_prompt, build_web_search_prompt, build_comprehensive_analysis_prompt, build_batch_questions_prompt, build_final_synthesis_prompt
 from src.deep_research_client import DeepResearchClient
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ class AgentCallback(Protocol):
     def on_status_update(self, stage: str, message: str) -> None: ...
     def on_info(self, message: str) -> None: ...
     def on_warning(self, message: str) -> None: ...
-    def on_question_asked(self, question: str, reason: str, options: Optional[List[Dict[str, str]]] = None) -> None: ...
+    def on_question_asked(self, question: str, reason: str, options: Optional[List[Dict[str, str]]] = None, allow_multiple: bool = False) -> None: ...
     def on_intent_confirmed(self, intent: 'SearchIntent') -> None: ...
     def on_recommendation_completed(self, intent: 'SearchIntent', web_report: 'WebSearchReport', final_report: 'RecommendationReport') -> None: ...
     async def request_user_input(self, prompt: str) -> str: ...
@@ -32,12 +32,13 @@ class DefaultCliCallback:
     def on_warning(self, message: str) -> None:
         print(f"⚠️ {message}")
         
-    def on_question_asked(self, question: str, reason: str, options: Optional[List[Dict[str, str]]] = None) -> None:
+    def on_question_asked(self, question: str, reason: str, options: Optional[List[Dict[str, str]]] = None, allow_multiple: bool = False) -> None:
         reason_str = f"（{reason}）" if reason else ""
+        select_hint = "（可多选）" if allow_multiple else ""
         print(f"\n🙋 顾问追问 {reason_str}：")
         print(f"   {question}")
         if options:
-            print(f"   选项: {' / '.join([opt.get('label', '') for opt in options if isinstance(opt, dict) and opt.get('label')])}")
+            print(f"   选项{select_hint}: {' / '.join([opt.get('label', '') for opt in options if isinstance(opt, dict) and opt.get('label')])}")
 
     def on_intent_confirmed(self, intent: SearchIntent) -> None:
         """展示收集到的完整需求档案"""
@@ -173,14 +174,109 @@ class RecommendationAgent:
         return model_class.model_validate_json(json_str)
 
     # ========================= 需求深度分析 =========================
-    MAX_CLARIFICATION_ROUNDS = 5  # 最多追问轮数
+    NUM_QUESTIONS = 10  # 一次性生成的追问数量
 
-    async def analyze_needs(self, history: List[Dict[str, str]]) -> NeedsAnalysis:
+    async def generate_batch_questions(self, initial_query: str) -> BatchQuestions:
         """
-        LLM 驱动的深度需求分析。
-        从对话上下文中提取结构化需求信息，并智能判断是否需要继续追问。
+        根据用户初始输入，一次性生成所有追问问题。
+        单次 LLM 调用完成问题规划，替代旧的多轮逐次生成。
         """
-        sys_prompt = NEEDS_ANALYSIS_PROMPT
+        sys_prompt = build_batch_questions_prompt(self.NUM_QUESTIONS)
+
+        response = await self.llm.beta.chat.completions.parse(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": initial_query},
+            ],
+            response_format=BatchQuestions,
+        )
+        batch = self._safe_parse_response(response, BatchQuestions)
+
+        if len(batch.questions) > self.NUM_QUESTIONS:
+            batch.questions = batch.questions[:self.NUM_QUESTIONS]
+
+        logger.info(
+            f"Batch questions generated: {len(batch.questions)} questions, "
+            f"category={batch.category}, keywords={batch.initial_keywords}"
+        )
+        return batch
+
+    def _get_default_batch_questions(self) -> BatchQuestions:
+        """LLM 生成问题失败时的兜底问题列表"""
+        return BatchQuestions(
+            questions=[
+                QuestionItem(
+                    question="您的预算大概在什么范围呢？",
+                    reason="了解预算能帮我精准推荐合适价位的产品",
+                    options=["500以内", "500-1000", "1000-3000", "3000以上", "不限预算"],
+                    allow_multiple=False,
+                ),
+                QuestionItem(
+                    question="方便告诉我您的年龄段吗？",
+                    reason="不同年龄段适合的产品有差异",
+                    options=["20岁以下", "20-30岁", "30-40岁", "40-50岁", "50岁以上"],
+                    allow_multiple=False,
+                ),
+                QuestionItem(
+                    question="您的性别是？",
+                    reason="不同性别的产品需求会有差异",
+                    options=["男", "女"],
+                    allow_multiple=False,
+                ),
+                QuestionItem(
+                    question="您最看重哪方面的特性呢？",
+                    reason="了解具体需求可以筛选最匹配的产品",
+                    options=["性价比", "品牌口碑", "功效显著", "温和安全", "使用方便"],
+                    allow_multiple=True,
+                ),
+                QuestionItem(
+                    question="还有其他特别在意的功能点吗？",
+                    reason="多了解一些需求能推荐得更精准",
+                    options=["外观颜值", "便携性", "持久耐用", "没有了"],
+                    allow_multiple=True,
+                ),
+                QuestionItem(
+                    question="主要是自己用还是送人呢？",
+                    reason="使用场景不同推荐策略不同",
+                    options=["自己日常用", "送礼", "特定场合", "办公/工作"],
+                    allow_multiple=False,
+                ),
+                QuestionItem(
+                    question="有特别喜欢的品牌吗？",
+                    reason="了解品牌偏好可以缩小推荐范围",
+                    options=["国货品牌", "国际大牌", "无偏好"],
+                    allow_multiple=True,
+                ),
+                QuestionItem(
+                    question="有特别想避开的品牌吗？",
+                    reason="排除不想要的品牌能节省筛选时间",
+                    options=["没有", "有（请输入）"],
+                    allow_multiple=False,
+                ),
+                QuestionItem(
+                    question="之前用过类似产品吗？有什么不满意的地方？",
+                    reason="了解过往体验帮您避开类似问题",
+                    options=["没用过", "效果不明显", "刺激过敏", "质地不喜欢", "性价比差"],
+                    allow_multiple=True,
+                ),
+                QuestionItem(
+                    question="购买渠道有偏好吗？",
+                    reason="不同渠道价格和保障不同",
+                    options=["京东", "天猫", "线下专柜", "都可以"],
+                    allow_multiple=True,
+                ),
+            ],
+            category=None,
+            initial_keywords="",
+        )
+
+    async def synthesize_needs(self, history: List[Dict[str, str]]) -> NeedsAnalysis:
+        """
+        综合用户初始输入和所有追问回答，生成最终的完整需求分析。
+        单次 LLM 调用将全部对话信息提炼为结构化的 NeedsAnalysis。
+        """
+        sys_prompt = build_final_synthesis_prompt()
 
         messages = [{"role": "system", "content": sys_prompt}]
         messages.extend(history)
@@ -191,9 +287,13 @@ class RecommendationAgent:
             response_format=NeedsAnalysis,
         )
         analysis = self._safe_parse_response(response, NeedsAnalysis)
-        logger.info(f"LLM needs analysis: sufficient={analysis.is_sufficient}, "
-                    f"category={analysis.category}, budget={analysis.budget}, "
-                    f"needs={analysis.core_needs}, profile={analysis.user_profile}")
+        analysis.is_sufficient = True
+
+        logger.info(
+            f"Final synthesis: category={analysis.category}, budget={analysis.budget}, "
+            f"needs={analysis.core_needs}, profile={analysis.user_profile}, "
+            f"keywords={analysis.keywords}"
+        )
         return analysis
 
     def _build_search_intent(self, analysis: NeedsAnalysis) -> SearchIntent:
@@ -779,46 +879,38 @@ class RecommendationAgent:
         logger.info(f"Starting new interaction pipeline with query: {initial_query}")
         history = [{"role": "user", "content": initial_query}]
 
-        # ==================== 阶段 0: LLM 驱动的深度需求分析 ====================
-        callback.on_status_update("Phase 0", "🔍 正在深度分析您的需求...")
-        
-        intent = None
-        for round_num in range(self.MAX_CLARIFICATION_ROUNDS):
-            analysis = await self.analyze_needs(history)
-            
-            if analysis.is_sufficient:
-                # 信息足够，构建最终 SearchIntent
-                intent = self._build_search_intent(analysis)
-                break
-            else:
-                # 信息不足，LLM 生成智能追问
-                question = analysis.follow_up_question
-                if not question:
-                    # 安全兜底：如果 LLM 没给出问题但标记为不足
-                    intent = self._build_search_intent(analysis)
-                    break
-                
-                reason = analysis.follow_up_reason or ""
-                options = [{"label": item, "value": item} for item in analysis.follow_up_options if item]
-                callback.on_question_asked(question, reason, options if options else None)
-                history.append({"role": "assistant", "content": question})
-                
-                user_reply = await callback.request_user_input("\n> 回答 (输入 'q' 取消, 's' 跳过此问题): ")
-                if user_reply.strip().lower() in ['q', 'quit', 'exit']:
-                    callback.on_info("已取消本次推荐。\n")
-                    return
-                if user_reply.strip().lower() == 's':
-                    history.append({"role": "user", "content": "跳过这个问题，我没有特别的偏好"})
-                else:
-                    history.append({"role": "user", "content": user_reply})
-        else:
-            # 达到最大追问轮数，用已有信息继续
-            logger.info("Max clarification rounds reached, proceeding with available info")
-            analysis = await self.analyze_needs(history)
-            intent = self._build_search_intent(analysis)
+        # ==================== 阶段 0: LLM 一次性生成追问 + 逐题收集回答 ====================
+        callback.on_status_update("Phase 0", "🔍 正在分析您的需求，生成追问问题...")
 
-        if intent is None:
-            return
+        # Step 1: LLM 一次性生成追问问题
+        try:
+            batch = await self.generate_batch_questions(initial_query)
+        except Exception as e:
+            logger.error(f"Failed to generate batch questions: {e}, using defaults")
+            callback.on_warning(f"问题生成异常，使用默认问题列表")
+            batch = self._get_default_batch_questions()
+
+        # Step 2: 逐个向用户提问并收集回答
+        for i, q_item in enumerate(batch.questions):
+            options = [{"label": item, "value": item} for item in q_item.options if item]
+            callback.on_question_asked(q_item.question, q_item.reason, options if options else None, q_item.allow_multiple)
+            history.append({"role": "assistant", "content": q_item.question})
+
+            user_reply = await callback.request_user_input(
+                f"\n> 回答第 {i + 1}/{len(batch.questions)} 题 (输入 'q' 取消, 's' 跳过): "
+            )
+            if user_reply.strip().lower() in ['q', 'quit', 'exit']:
+                callback.on_info("已取消本次推荐。\n")
+                return
+            if user_reply.strip().lower() == 's':
+                history.append({"role": "user", "content": "跳过这个问题，我没有特别的偏好"})
+            else:
+                history.append({"role": "user", "content": user_reply})
+
+        # Step 3: 综合所有信息生成最终需求分析
+        callback.on_status_update("Phase 0", "🔍 正在综合分析您的所有回答...")
+        analysis = await self.synthesize_needs(history)
+        intent = self._build_search_intent(analysis)
 
         # 补全 keywords（兜底）
         if not intent.keywords:

@@ -16,6 +16,7 @@ const sessions = ref([]);
 const activeSession = ref(null);
 const historyOpen = ref(false);
 const waitingAnswer = ref(false);
+const isInAnalysis = ref(false);
 const wsUrl = computed(() => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}/ws`;
@@ -41,19 +42,24 @@ const handleWsMessage = (msg) => {
   switch (msg.type) {
     case 'status':
       sidebarRef.value.syncStepByStatus(msg.stage);
-      sidebarRef.value.addMessage({
-        id: Date.now(),
-        role: 'system',
-        text: `${msg.stage} · ${msg.message}`
-      });
+      if (msg.stage && msg.stage !== 'Phase 0') {
+        isInAnalysis.value = true;
+        sidebarRef.value.updateAnalyzing(msg.message, msg.stage);
+      } else {
+        sidebarRef.value.setTyping(true);
+      }
       break;
     case 'info':
     case 'warning':
-      sidebarRef.value.addMessage({
-        id: Date.now(),
-        role: 'system',
-        text: msg.message
-      });
+      if (isInAnalysis.value) {
+        sidebarRef.value.updateAnalyzing(msg.message);
+      } else {
+        sidebarRef.value.addMessage({
+          id: Date.now(),
+          role: 'system',
+          text: msg.message
+        });
+      }
       break;
     case 'request_input': {
       waitingAnswer.value = true;
@@ -68,22 +74,39 @@ const handleWsMessage = (msg) => {
         id: Date.now(),
         role: 'bot',
         text: questionText,
-        options: msg.options || []
+        options: msg.options || [],
+        allowMultiple: msg.allow_multiple || false
       });
       break;
     }
     case 'intent':
       userIntent.value = msg.data;
       sidebarRef.value.syncStepByIntent();
+      sidebarRef.value.setTyping(false);
+      {
+        const d = msg.data || {};
+        const product = d.category || d.product || '商品';
+        const budget = d.budget || '预算不限';
+        const preference = (Array.isArray(d.core_needs) ? d.core_needs.join('、') : d.preference) || '通用需求';
+        const searchKeywords = `${budget} ${product} ${preference}`;
+        sidebarRef.value.addMessage({
+          id: Date.now(),
+          role: 'bot',
+          type: 'intent-summary',
+          text: `✅ 用户需求已明确：\n\n📦 目标商品：${product}\n💰 预算范围：${budget}\n🎯 重点侧重：${preference}\n🔑 生成搜索词：${searchKeywords}`,
+        });
+      }
       break;
     case 'completed':
       waitingAnswer.value = false;
+      isInAnalysis.value = false;
+      sidebarRef.value.clearAnalyzing();
       sidebarRef.value.syncStepByCompleted();
       sidebarRef.value.setTyping(false);
       sidebarRef.value.addMessage({
         id: Date.now(),
-        role: 'system',
-        text: '分析完成'
+        role: 'bot',
+        text: '✅ 分析完成！已为您生成专属推荐榜单，请查看右侧的结构化推荐卡片。'
       });
       
       // Transform backend report to frontend product format
@@ -117,6 +140,8 @@ const handleWsMessage = (msg) => {
       break;
     case 'error':
       waitingAnswer.value = false;
+      isInAnalysis.value = false;
+      sidebarRef.value.clearAnalyzing();
       sidebarRef.value.setTyping(false);
       sidebarRef.value.addMessage({
         id: Date.now(),
@@ -126,6 +151,8 @@ const handleWsMessage = (msg) => {
       break;
     case 'pipeline_end':
       waitingAnswer.value = false;
+      isInAnalysis.value = false;
+      sidebarRef.value.clearAnalyzing();
       sidebarRef.value.setTyping(false);
       break;
   }
@@ -196,6 +223,7 @@ const handleNewSession = () => {
   hasSearched.value = false;
   currentProducts.value = [];
   userIntent.value = null;
+  isInAnalysis.value = false;
   if (sidebarRef.value) {
     sidebarRef.value.clearMessages();
   }
