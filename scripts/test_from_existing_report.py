@@ -102,6 +102,17 @@ async def test_from_file(file_path: str):
         print(f"❌ 综合分析失败: {e}")
 
 if __name__ == "__main__":
-    # 指定文件路径
-    TARGET_FILE = "output/deep_research_中年女性_温和抗老_祛斑_晚间修护_油皮_20260309_215758.md"
-    asyncio.run(test_from_file(TARGET_FILE))
+    # 自动寻找最新的 deep_research 报告
+    output_dir = "output"
+    reports = [f for f in os.listdir(output_dir) if f.startswith("deep_research_") and f.endswith(".md")]
+    
+    if not reports:
+        print(f"❌ 错误: 在 {output_dir} 目录下未找到任何 deep_research 报告文件。")
+        sys.exit(1)
+        
+    # 按修改时间排序，取最新的
+    reports.sort(key=lambda x: os.path.getmtime(os.path.join(output_dir, x)), reverse=True)
+    latest_report = os.path.join(output_dir, reports[0])
+    
+    print(f"🚀 发现最新报告: {latest_report}")
+    asyncio.run(test_from_file(latest_report))

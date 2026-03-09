@@ -302,22 +302,19 @@ class RecommendationAgent:
         self._save_deep_research_report(raw_report, search_intent)
 
         # 使用普通 LLM 将 markdown 研究报告结构化为 WebSearchReport
-        structurize_prompt = f"""你是一个数据提取专家。下面是一份商品调研报告（markdown 格式），请从中提取结构化信息。
+        structurize_prompt = f"""你是一个高精度的护肤品数据提取专家。
+        请阅读下面的调研报告，并从中提取出【精选候选商品深度评测】或类似章节中提到的所有具体商品。
 
-⚠️ 重要：请从报告中提取以下信息，严格按照 WebSearchReport 格式输出 JSON：
-- market_summary: 市场概况简述
-- candidates: 提取报告中推荐的所有候选商品（每款包含 product_name, brand, price_range, highlights, sales_info, search_keyword_for_xhs）
-- raw_search_evidence: 报告中提到的所有具体数据点（销量数据、好评率、评测评分、价格信息等），原样保留
+        ⚠️ 重要规范：
+        1. 严格按照 WebSearchReport 格式输出 JSON。
+        2. candidates 列表不能为空，必须包含报告中详细评测的所有商品。
+        3. search_keyword_for_xhs 必须简洁（品牌+型号），例如 "珀莱雅红宝石精华"、"薇诺娜修护精华"。
+        4. raw_search_evidence 请摘录报告中提到的销量、好评率或实验数据。
+        5. market_summary: 简述市场概况。
+        """
 
-关于 search_keyword_for_xhs 字段（如果报告中未明确提供，请根据商品名称自行生成）：
-- 必须简短精准，2~4 个词，不超过 10 个汉字
-- 格式："品牌名 产品型号"，如 "珀莱雅红宝石套装"、"ThinkPad X1 Carbon"
-- 不加"测评""推荐"等后缀
-
-请以 JSON 格式输出。"""
-
-        # 截断过长的报告以控制 token
-        max_report_len = 15000
+        # 增加截断长度，确保覆盖长报告
+        max_report_len = 40000
         report_for_parse = raw_report[:max_report_len] if len(raw_report) > max_report_len else raw_report
 
         try:
@@ -332,6 +329,10 @@ class RecommendationAgent:
                 max_tokens=3000,
             )
             report = self._safe_parse_response(response, WebSearchReport)
+            
+            if not report.candidates:
+                logger.warning("[Phase1] Structurize parsed but found 0 candidates, retrying with lenient prompt...")
+                # 简单重试逻辑或抛出异常以便回退
         except Exception as e:
             logger.error(f"[Phase1] Failed to structurize deep research report: {e}")
             logger.info("[Phase1] Falling back to enable_search mode")
