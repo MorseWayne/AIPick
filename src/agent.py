@@ -104,7 +104,11 @@ class DefaultCliCallback:
         return await asyncio.to_thread(input, prompt)
 
 class RecommendationAgent:
-    def __init__(self, mcp_url: str = "http://10.10.131.118:18060/mcp"):
+    def __init__(self, mcp_url: Optional[str] = None):
+        # 优先级：传入参数 > 环境变量 > 默认本地地址
+        if not mcp_url:
+            mcp_url = os.getenv("XHS_MCP_URL", "http://localhost:18060/mcp")
+            
         # 读取模型相关的配置
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -302,10 +306,10 @@ class RecommendationAgent:
 
 ⚠️ 重要：请从报告中提取以下信息，严格按照 WebSearchReport 格式输出 JSON：
 - market_summary: 市场概况简述
-- candidates: 3~5 款候选商品（每款包含 product_name, brand, price_range, highlights, sales_info, search_keyword_for_xhs）
+- candidates: 提取报告中推荐的所有候选商品（每款包含 product_name, brand, price_range, highlights, sales_info, search_keyword_for_xhs）
 - raw_search_evidence: 报告中提到的所有具体数据点（销量数据、好评率、评测评分、价格信息等），原样保留
 
-关于 search_keyword_for_xhs 字段：
+关于 search_keyword_for_xhs 字段（如果报告中未明确提供，请根据商品名称自行生成）：
 - 必须简短精准，2~4 个词，不超过 10 个汉字
 - 格式："品牌名 产品型号"，如 "珀莱雅红宝石套装"、"ThinkPad X1 Carbon"
 - 不加"测评""推荐"等后缀

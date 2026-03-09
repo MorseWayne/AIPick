@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIPick - Deep Research 智能购物助手</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --chat-bg: rgba(30, 41, 59, 0.7);
+            --user-msg-bg: #3b82f6;
+            --ai-msg-bg: rgba(51, 65, 85, 0.8);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --accent: #60a5fa;
+            --accent-hover: #93c5fd;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #020617, #0f172a, #172554);
+            color: var(--text-color);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .header h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(to right, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header .badge {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            background: rgba(167, 139, 250, 0.2);
+            color: #a78bfa;
+            border: 1px solid rgba(167, 139, 250, 0.3);
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            scroll-behavior: smooth;
+        }
+
+        .chat-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .message-row {
+            display: flex;
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 1rem 1.2rem;
+            border-radius: 16px;
+            line-height: 1.6;
+            font-size: 0.95rem;
+            animation: fadeIn 0.3s ease-out;
+            position: relative;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            background-color: var(--user-msg-bg);
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+
+        .message.ai {
+            background: var(--ai-msg-bg);
+            border: 1px solid var(--border-color);
+            border-bottom-left-radius: 4px;
+            backdrop-filter: blur(10px);
+        }
+
+        .message.status-card {
+            background: rgba(15, 23, 42, 0.4);
+            border: 1px dashed rgba(167, 139, 250, 0.4);
+            color: #cbd5e1;
+            font-size: 0.85rem;
+            padding: 0.8rem 1rem;
+            border-radius: 12px;
+            margin: 0.5rem auto;
+            max-width: 800px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+
+        .status-title {
+            color: #a78bfa;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        input-area {
+            display: block;
+        }
+
+        .input-container {
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 1.5rem 2rem;
+            background: var(--bg-color);
+            border-top: 1px solid var(--border-color);
+            position: relative;
+            z-index: 10;
+        }
+
+        .input-box {
+            display: flex;
+            background: var(--chat-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 0.5rem;
+            align-items: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease;
+        }
+        
+        .input-box:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 10px 30px rgba(96, 165, 250, 0.2);
+        }
+
+        textarea {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-color);
+            padding: 0.8rem 1rem;
+            font-size: 1rem;
+            resize: none;
+            max-height: 150px;
+            height: 50px;
+            outline: none;
+            font-family: inherit;
+        }
+
+        button.send-btn {
+            background: var(--user-msg-bg);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            padding: 0.8rem 1.2rem;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        button.send-btn:hover {
+            background: #2563eb;
+            transform: scale(1.05);
+        }
+        
+        button.action-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        
+        button.action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .actions-panel {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .markdown-body {
+            color: var(--text-color);
+        }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+            margin-top: 1.5rem;
+            margin-bottom: 0.8rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .markdown-body h2 {
+            border-left: 4px solid var(--accent);
+            padding-left: 0.8rem;
+            font-size: 1.2rem;
+        }
+        .markdown-body ul, .markdown-body ol {
+            padding-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .markdown-body li {
+            margin-bottom: 0.5rem;
+        }
+        .markdown-body strong {
+            color: #fff;
+            font-weight: 600;
+        }
+        .markdown-body a {
+            color: var(--accent);
+            text-decoration: none;
+            border-bottom: 1px dashed rgba(96, 165, 250, 0.4);
+            transition: all 0.2s;
+        }
+        .markdown-body a:hover {
+            color: var(--accent-hover);
+            border-bottom-style: solid;
+        }
+        
+        /* 脚注样式适配 */
+        .markdown-body sup, .markdown-body .footnote-ref {
+            font-size: 0.75em;
+            vertical-align: super;
+            line-height: 0;
+            color: var(--accent);
+            cursor: help;
+        }
+        
+        /* 参考文献区域 */
+        .references-section {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+        .reference-item {
+            margin-bottom: 0.4rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+        .reference-index {
+            color: var(--accent);
+            font-weight: 500;
+            min-width: 1.5rem;
+        }
+
+        /* 推荐榜单卡片 */
+        .recommendation-card {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.2rem;
+            margin: 1rem 0;
+            transition: transform 0.2s;
+        }
+        .recommendation-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(96, 165, 250, 0.3);
+            background: rgba(30, 41, 59, 0.7);
+        }
+        
+        /* Spinner */
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 5px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Question actions */
+        .question-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>✨ AIPick <span class="badge">Deep Research</span></h1>
+        <div id="connection-status" class="badge" style="background: rgba(74, 222, 128, 0.2); color: #4ade80; border-color: rgba(74, 222, 128, 0.3);">
+            已连接
+        </div>
+    </div>
+
+    <div class="chat-container" id="chat">
+        <div class="message-row ai">
+            <div class="message ai markdown-body">
+                欢迎使用【AIPick】！<br>
+                您可以输入您的自然语言需求，例如：<br>
+                *"我想买适用用中年女性的护肤品，目的是抗衰老，祛斑，体质是油性皮肤，容易长痘，看看买什么合适"*
+            </div>
+        </div>
+    </div>
+
+    <div class="input-container">
+        <div class="input-box">
+            <textarea id="userInput" placeholder="输入您的购物需求..." rows="1" onkeydown="handleEnter(event)"></textarea>
+            <button class="send-btn" onclick="sendReq()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('userInput');
+        const statusBadge = document.getElementById('connection-status');
+        
+        let ws;
+        let isWaitingForAnswer = false;
+        let currentStatusBox = null;
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                statusBadge.innerText = '已连接';
+                statusBadge.style.color = '#4ade80';
+                statusBadge.style.borderColor = 'rgba(74, 222, 128, 0.3)';
+                statusBadge.style.background = 'rgba(74, 222, 128, 0.2)';
+            };
+
+            ws.onclose = () => {
+                statusBadge.innerText = '已断开连接';
+                statusBadge.style.color = '#f87171';
+                statusBadge.style.borderColor = 'rgba(248, 113, 113, 0.3)';
+                statusBadge.style.background = 'rgba(248, 113, 113, 0.2)';
+                setTimeout(connect, 3000);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+        }
+
+        function handleMessage(data) {
+            if (data.type === 'status') {
+                updateOrCreateStatus(data.stage, data.message);
+            } else if (data.type === 'info' || data.type === 'warning') {
+                appendToStatus(data.message, data.type === 'warning');
+            } else if (data.type === 'question' || data.type === 'request_input') {
+                if (currentStatusBox) {
+                    currentStatusBox.querySelector('.spinner').style.display = 'none';
+                    currentStatusBox = null;
+                }
+                
+                const html = `
+                    <div style="margin-bottom: 0.5rem; font-weight: 500; color: #a78bfa;">🙋 顾问追问</div>
+                    <div style="color: #cbd5e1; font-size: 0.9em; margin-bottom: 0.5rem; border-left: 2px solid #a78bfa; padding-left: 0.5rem;">${data.reason || ''}</div>
+                    <div style="color: #fff; font-size: 1.1em;">${data.question || data.prompt}</div>
+                    <div class="question-actions" id="action-${Date.now()}">
+                        <button class="action-btn" onclick="sendQuickAnswer('q', this)">取消推荐</button>
+                        <button class="action-btn" onclick="sendQuickAnswer('s', this)">跳过问题</button>
+                    </div>
+                `;
+                addMessage(html, 'ai');
+                isWaitingForAnswer = true;
+                input.placeholder = "回答问题以继续...";
+                input.focus();
+            } else if (data.type === 'completed') {
+                if (currentStatusBox) {
+                    currentStatusBox.querySelector('.spinner').style.display = 'none';
+                    currentStatusBox = null;
+                }
+                
+                // 1. 先展示全网概况 (如果有)
+                if (data.web_report && data.web_report.market_summary) {
+                     addMessage(marked.parse(`📊 **全网市场概况**\n\n${data.web_report.market_summary}`), 'ai');
+                }
+
+                // 2. 渲染最终推荐榜单为精美卡片
+                let finalHtml = `🎉 **分析完成！这是为您推荐的榜单：**\n\n`;
+                data.final_report.recommendations.forEach((r, i) => {
+                    const medal = ["🥇", "🥈", "🥉"][i] || "🏅";
+                    const confidenceColor = {"高": "#4ade80", "中": "#facc15", "低": "#f87171"}[r.confidence_level] || "#cbd5e1";
+                    
+                    finalHtml += `
+<div class="recommendation-card">
+    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.8rem;">
+        <h3 style="margin: 0; font-size: 1.25rem; color: #fff;">${medal} ${r.product_name}</h3>
+        <span style="font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 4px; background: rgba(255,255,255,0.05); color: ${confidenceColor}; border: 1px solid ${confidenceColor}33;">
+            置信度: ${r.confidence_level}
+        </span>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 1rem;">
+        <div style="background: rgba(96, 165, 250, 0.1); padding: 0.5rem; border-radius: 8px; text-align: center;">
+            <div style="font-size: 0.7rem; color: #93c5fd; text-transform: uppercase;">推荐指数</div>
+            <div style="font-size: 1.2rem; font-weight: 600; color: #60a5fa;">${r.recommendation_index}<span style="font-size: 0.8rem; opacity: 0.6;">/100</span></div>
+        </div>
+        <div style="background: rgba(167, 139, 250, 0.1); padding: 0.5rem; border-radius: 8px; text-align: center;">
+            <div style="font-size: 0.7rem; color: #c084fc; text-transform: uppercase;">性价比</div>
+            <div style="font-size: 1.2rem; font-weight: 600; color: #a78bfa;">${r.cost_performance}<span style="font-size: 0.8rem; opacity: 0.6;">/10</span></div>
+        </div>
+    </div>
+
+    <div style="font-size: 0.9rem; margin-bottom: 0.8rem; line-height: 1.5;">
+        <div style="color: #4ade80; margin-bottom: 0.2rem;">✅ 核心优点</div>
+        <div style="color: #cbd5e1; padding-left: 0.5rem;">${r.pros.join('；')}</div>
+    </div>
+    
+    <div style="font-size: 0.9rem; margin-bottom: 0.8rem; line-height: 1.5;">
+        <div style="color: #f87171; margin-bottom: 0.2rem;">❌ 潜在槽点</div>
+        <div style="color: #cbd5e1; padding-left: 0.5rem;">${r.cons.join('；')}</div>
+    </div>
+
+    <div style="font-size: 0.9rem; background: rgba(0,0,0,0.2); padding: 0.8rem; border-radius: 6px; border-left: 3px solid #60a5fa;">
+        <span style="color: #93c5fd; font-weight: 500;">💡 选购建议:</span> ${r.summary}
+    </div>
+</div>`;
+                });
+                
+                addMessage(finalHtml, 'ai');
+                
+                // Add actions panel
+                if (data.md_path) {
+                    addActionPanel(data.md_path);
+                }
+            } else if (data.type === 'error') {
+                addMessage(`❌ **发生错误:** ${data.message}`, 'ai');
+            } else if (data.type === 'intent') {
+                const html = `
+                    <div style="font-weight: 500; margin-bottom: 0.5rem; color: #60a5fa;">📋 需求分析完成，已为您生成档案：</div>
+                    <div style="background: rgba(30, 41, 59, 0.5); border-radius: 8px; padding: 1rem; font-size: 0.9em; line-height: 1.6;">
+                        <div>🏷️ <span style="color: #94a3b8; width: 80px; display: inline-block;">目标商品:</span> <strong style="color: #fff;">${data.data.category || '未指定'}</strong></div>
+                        <div>💰 <span style="color: #94a3b8; width: 80px; display: inline-block;">预算范围:</span> <strong style="color: #fff;">${data.data.budget || '不限'}</strong></div>
+                        <div>🎯 <span style="color: #94a3b8; width: 80px; display: inline-block;">核心需求:</span> <strong style="color: #fff;">${(data.data.core_needs||[]).join(', ') || '通用'}</strong></div>
+                        ${data.data.user_profile ? `<div>👤 <span style="color: #94a3b8; width: 80px; display: inline-block;">用户画像:</span> <strong style="color: #fff;">${data.data.user_profile}</strong></div>` : ''}
+                    </div>
+                `;
+                addMessage(html, 'ai');
+            }
+        }
+
+        function formatMarkdown(text) {
+            if (!text) return "";
+            // 处理参考文献格式: [[n]] [标题](url) -> 在参考文献列表中展示，正文中保留 [[n]]
+            // 这里我们先使用 marked 渲染，外部可以处理 footnotes 的逻辑
+            
+            // 简单的正则表达式：将 [[n]] 转换为上标样式的链接
+            let processed = text.replace(/\[\[(\d+)\]\]/g, '<sup class="footnote-ref" title="点击跳转参考文献">$1</sup>');
+            
+            return marked.parse(processed);
+        }
+
+        function updateOrCreateStatus(stage, msg) {
+            if (!currentStatusBox || currentStatusBox.dataset.stage !== stage) {
+                if (currentStatusBox) {
+                    currentStatusBox.querySelector('.spinner').style.display = 'none';
+                }
+                
+                const el = document.createElement('div');
+                el.className = 'message status-card';
+                el.dataset.stage = stage;
+                
+                el.innerHTML = `
+                    <div class="status-title">
+                        <span class="spinner"></span>
+                        [${stage}] ${msg}
+                    </div>
+                    <div class="status-log" style="font-size: 0.85em; opacity: 0.8; margin-top: 0.5rem; max-height: 150px; overflow-y: auto;"></div>
+                `;
+                chat.appendChild(el);
+                currentStatusBox = el;
+                scrollToBottom();
+            } else {
+                currentStatusBox.querySelector('.status-title').innerHTML = `
+                    <span class="spinner"></span>
+                    [${stage}] ${msg}
+                `;
+            }
+        }
+
+        function appendToStatus(msg, isWarning) {
+            if (!currentStatusBox) {
+                updateOrCreateStatus('System', 'Processing...');
+            }
+            const logContainer = currentStatusBox.querySelector('.status-log');
+            const logEl = document.createElement('div');
+            logEl.style.color = isWarning ? '#fcd34d' : 'inherit';
+            logEl.innerText = msg;
+            logContainer.appendChild(logEl);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function addMessage(textOrHtml, sender) {
+            const row = document.createElement('div');
+            row.className = `message-row ${sender}`;
+            const msg = document.createElement('div');
+            msg.className = `message ${sender} markdown-body`;
+            
+            if (sender === 'user') {
+                msg.innerText = textOrHtml;
+            } else {
+                msg.innerHTML = textOrHtml;
+            }
+            
+            row.appendChild(msg);
+            chat.appendChild(row);
+            scrollToBottom();
+        }
+
+        function addActionPanel(path) {
+            const row = document.createElement('div');
+            row.className = `message-row ai`;
+            
+            const msg = document.createElement('div');
+            msg.className = `message ai`;
+            
+            msg.innerHTML = `
+                📄 推荐报告已生成
+                <div class="actions-panel">
+                    <a href="/${path}" target="_blank" class="action-btn">
+                        预览 Markdown 报告
+                    </a>
+                    <a href="/${path}" download class="action-btn">
+                        下载报告
+                    </a>
+                </div>
+            `;
+            
+            row.appendChild(msg);
+            chat.appendChild(row);
+            scrollToBottom();
+        }
+
+        function sendReq() {
+            const text = input.value.trim();
+            if (!text) return;
+
+            addMessage(text, 'user');
+            input.value = '';
+            input.style.height = '50px';
+
+            if (isWaitingForAnswer) {
+                ws.send(JSON.stringify({ type: 'answer', content: text }));
+                isWaitingForAnswer = false;
+                input.placeholder = "输入您的购物需求...";
+                
+                // clear question actions
+                document.querySelectorAll('.question-actions').forEach(el => el.style.display = 'none');
+            } else {
+                ws.send(JSON.stringify({ type: 'query', content: text }));
+            }
+        }
+        
+        function sendQuickAnswer(ans, btn) {
+            if (!isWaitingForAnswer) return;
+            addMessage(ans === 'q' ? "取消本次推荐" : "跳过", 'user');
+            ws.send(JSON.stringify({ type: 'answer', content: ans }));
+            isWaitingForAnswer = false;
+            input.placeholder = "输入您的购物需求...";
+            btn.parentElement.style.display = 'none';
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendReq();
+            }
+        }
+
+        // Auto-resize textarea
+        input.addEventListener('input', function() {
+            this.style.height = '50px';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+
+        function scrollToBottom() {
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        window.onload = connect;
+    </script>
+</body>
+</html>

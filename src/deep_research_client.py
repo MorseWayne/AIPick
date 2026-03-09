@@ -35,16 +35,6 @@ class DeepResearchClient:
     ) -> str:
         """
         执行完整的两步式深度研究，返回最终的研究报告文本。
-
-        Step 1: 发送查询 → 模型返回反问/确认内容
-        Step 2: 将反问内容 + 用户确认（"请直接按上述方向深入研究"）发回 → 模型执行深度搜索并生成报告
-
-        Args:
-            query: 研究查询内容（应包含完整的用户需求和搜索指令）
-            on_status: 可选的状态回调函数 (phase, status) -> None
-
-        Returns:
-            最终研究报告的完整文本
         """
         logger.info(f"[DeepResearch] Starting two-step research with model={self.model}")
 
@@ -73,7 +63,7 @@ class DeepResearchClient:
                 pass
 
         messages_step1 = [{"role": "user", "content": query}]
-        step1_content = self._call_stream(messages_step1, on_status, step_name="Step1")
+        step1_content, _ = self._call_stream(messages_step1, on_status, step_name="Step1")
 
         if not step1_content.strip():
             logger.warning("[DeepResearch] Step 1 returned empty content")
@@ -82,7 +72,6 @@ class DeepResearchClient:
         logger.info(f"[DeepResearch] Step 1 completed, clarification length={len(step1_content)} chars")
 
         # ===== Step 2: 深入研究 =====
-        # 将 Step 1 的反问内容作为 assistant 回复，然后用户确认"按此方向研究"
         logger.info("[DeepResearch] Step 2: Starting deep research...")
         if on_status:
             try:
@@ -95,7 +84,18 @@ class DeepResearchClient:
             {"role": "assistant", "content": step1_content},
             {"role": "user", "content": "请直接按以上方向进行全面深入的研究，不需要再确认。请重点调研各电商平台的销量排行、用户好评率、差评率、专业评测评分等具体数据。"},
         ]
-        step2_content = self._call_stream(messages_step2, on_status, step_name="Step2")
+        step2_content, collected_sites = self._call_stream(messages_step2, on_status, step_name="Step2")
+
+        # 将收集到的网站格式化为参考文献列表并追加到报告末尾
+        if collected_sites:
+            references_md = "\n\n## 参考文献 (References)\n\n"
+            for i, site in enumerate(collected_sites, 1):
+                title = site.get("title", "未知标题")
+                url = site.get("url", "#")
+                references_md += f"[[{i}]] [{title}]({url})\n"
+            
+            step2_content += references_md
+            logger.info(f"[DeepResearch] Appended {len(collected_sites)} references to the report")
 
         logger.info(f"[DeepResearch] Step 2 completed, report length={len(step2_content)} chars")
         return step2_content
@@ -105,10 +105,10 @@ class DeepResearchClient:
         messages: list,
         on_status: Optional[Callable[[str, str], None]] = None,
         step_name: str = "",
-    ) -> str:
+    ) -> tuple[str, list[dict]]:
         """
         单次流式调用 DashScope Deep Research API。
-        解析多阶段响应，累积 answer 阶段的内容并返回。
+        解析多阶段响应，累积 answer 阶段的内容并返回 (content, collected_sites)。
         """
         try:
             responses = dashscope.Generation.call(
@@ -125,6 +125,8 @@ class DeepResearchClient:
         answer_content = ""
         research_plan = ""
         web_sites_count = 0
+        collected_sites = []
+        seen_urls = set()
 
         for response in responses:
             # 检查响应状态
@@ -174,11 +176,16 @@ class DeepResearchClient:
                 deep_research_info = extra.get("deep_research", {})
                 research_info = deep_research_info.get("research", {})
 
-                if status == "streamingWebResult":
-                    sites = research_info.get("webSites", [])
-                    if sites:
-                        web_sites_count = len(sites)
-                elif status == "WebResultFinished":
+                # 收集网站链接
+                sites = research_info.get("webSites", [])
+                for site in sites:
+                    url = site.get("url")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        collected_sites.append(site)
+                        web_sites_count = len(collected_sites)
+
+                if status == "WebResultFinished":
                     logger.info(f"[DeepResearch][{step_name}] Web search completed, found {web_sites_count} sources")
                     if on_status:
                         try:
@@ -203,4 +210,4 @@ class DeepResearchClient:
         if research_plan:
             logger.info(f"[DeepResearch][{step_name}] Research plan length: {len(research_plan)} chars")
 
-        return answer_content
+        return answer_content, collected_sites
