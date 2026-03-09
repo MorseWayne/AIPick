@@ -1,10 +1,13 @@
 import os
 import json
 import asyncio
+import logging
 from typing import List, Dict, Any
 from openai import AsyncOpenAI
 from src.models import SearchIntent, RecommendationReport, ProductEvaluation
 from src.xhs_mcp_client import XhsMcpClient
+
+logger = logging.getLogger(__name__)
 
 class RecommendationAgent:
     def __init__(self, mcp_url: str = "http://10.10.131.118:18060/mcp"):
@@ -29,10 +32,13 @@ class RecommendationAgent:
             messages=messages,
             response_format=SearchIntent
         )
-        return response.choices[0].message.parsed
+        parsed_intent = response.choices[0].message.parsed
+        logger.info(f"LLM evaluates current intent: {parsed_intent.model_dump_json(exclude_none=True)}")
+        return parsed_intent
 
     async def fetch_and_analyze(self, search_intent: SearchIntent) -> RecommendationReport:
         """结合MCP结果与LLM对商品进行多维度分析"""
+        logger.info(f"[Pipeline] Fetching MCP list for keywords: {search_intent.keywords}")
         print(f"1. 提取到搜索关键词：{search_intent.keywords}")
         print(f"2. 开始从MCP拉取关于 '{search_intent.keywords}' 的小红书前排笔记...")
         
@@ -50,6 +56,7 @@ class RecommendationAgent:
                 data = json.loads(search_res)
                 feed_list = data[:3]
         except Exception as e:
+            logger.error(f"[Pipeline] Feeds parse error (maybe payload structure changed): {e}")
             print("搜索结果解析告警, 请按照实际 MCP 返回格式修改:", e)
             feed_list = [] # 模拟用的 fallback 或返回错误
 
@@ -58,6 +65,7 @@ class RecommendationAgent:
             feed_id = feed.get("id") or feed.get("feed_id")
             xsec_token = feed.get("xsec_token")
             if not feed_id or not xsec_token:
+                logger.warning(f"Ignored invalid feed id or xsec_token missing: {feed}")
                 continue
                 
             print(f"3. 正在拉取笔记详情及评论 (ID: {feed_id}) ...")
@@ -70,6 +78,7 @@ class RecommendationAgent:
             print("未能获取到有效的笔记和评论，可能是检索失败或结构改变。")
             return RecommendationReport(recommendations=[])
 
+        logger.info(f"[Pipeline] Aggregated details for {len(feed_list)} feeds. Evaluating sentiment...")
         print("4. 已抓取评论全文，交由大模型进行情感分析与商品多维度打分汇总...")
         sys_prompt = f"""
         你是一个精通全网商品测评的数据分析师。
@@ -89,9 +98,11 @@ class RecommendationAgent:
             response_format=RecommendationReport
         )
         report = response.choices[0].message.parsed
+        logger.info(f"[Pipeline] Generated recommendation report containing {len(report.recommendations)} products.")
         return report
 
     async def run_pipeline(self, initial_query: str):
+        logger.info(f"Starting new interaction pipeline with query: {initial_query}")
         history = [{"role": "user", "content": initial_query}]
         
         while True:
